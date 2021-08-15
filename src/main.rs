@@ -1,8 +1,10 @@
+use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use openssl::ssl::SslStream;
 
 pub mod certs;
+pub mod leap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key_name = "caseta.key";
@@ -30,7 +32,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut socket = JsonSocket::new(tls_socket);
     
     println!("Connected to bridge. Press and release the small black button on the back of the bridge");
-    println!("{}", socket.read_message()?);
+
+    'wait: loop {
+        if let Ok(msg) = serde_json::from_value::<leap::Message>(socket.read_message()?) {
+            if msg.Header.ContentType.starts_with("status;") {
+                if let Ok(body) = serde_json::from_value::<leap::ReportButtonPressBody>(msg.Body) {
+                    if body.Status.Permissions.contains(&leap::Permissions::PhysicalAccess) {
+                        println!("Demonstrated physical access!");
+                        break 'wait;
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

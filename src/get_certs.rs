@@ -4,8 +4,7 @@ use rsa::{pkcs8::{ToPrivateKey, ToPublicKey}, RsaPrivateKey, RsaPublicKey};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-pub mod certs;
-pub mod leap;
+mod lap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key_name = "caseta.key";
@@ -23,10 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let public_key_pem_bytes = public_key_pem.as_bytes();
     key_file.write(private_key_pem_bytes)?;
 
-    let lap_ca = openssl::x509::X509::from_pem(certs::LAP_CA.as_bytes()).unwrap();
-    let lap_cert = openssl::x509::X509::from_pem(certs::LAP_CERT.as_bytes()).unwrap();
+    let lap_ca = openssl::x509::X509::from_pem(lap::LAP_CA.as_bytes()).unwrap();
+    let lap_cert = openssl::x509::X509::from_pem(lap::LAP_CERT.as_bytes()).unwrap();
     let lap_key = openssl::pkey::PKey::from_rsa(
-        openssl::rsa::Rsa::private_key_from_pem(certs::LAP_KEY.as_bytes()).unwrap(),
+        openssl::rsa::Rsa::private_key_from_pem(lap::LAP_KEY.as_bytes()).unwrap(),
     )
     .unwrap();
 
@@ -48,13 +47,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     'wait: loop {
-        if let Ok(msg) = serde_json::from_value::<leap::Message>(socket.read_message()?) {
+        if let Ok(msg) = serde_json::from_value::<lap::Message>(socket.read_message()?) {
             if msg.Header.ContentType.starts_with("status;") {
-                if let Ok(body) = serde_json::from_value::<leap::ReportButtonPressBody>(msg.Body) {
+                if let Ok(body) = serde_json::from_value::<lap::ReportButtonPressBody>(msg.Body) {
                     if body
                         .Status
                         .Permissions
-                        .contains(&leap::Permissions::PhysicalAccess)
+                        .contains(&lap::Permissions::PhysicalAccess)
                     {
                         println!("Demonstrated physical access!");
                         break 'wait;
@@ -78,11 +77,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     csr.set_pubkey(&pkey_public).unwrap();
     let csr_text = csr
         .build()
-        .public_key()
-        .unwrap()
-        .public_key_to_pem()
+        .to_pem()
         .unwrap();
     let csr_text: String = std::str::from_utf8(&csr_text).to_owned().unwrap().to_owned();
+    
     let request = serde_json::json!({
         "Header": {
             "RequestType": "Execute",
@@ -99,12 +97,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         },
     });
-    println!("{}", &request);
     socket.write_message(&request).unwrap();
     loop {
-        if let Ok(msg) = serde_json::from_value::<leap::Message>(socket.read_message()?) {
+        if let Ok(msg) = serde_json::from_value::<lap::Message>(socket.read_message()?) {
             if msg.Header.ClientTag == Some("get-cert".to_owned()) {
-                println!("{}", msg.Body);
+                if let Ok(signing_result) = serde_json::from_value::<lap::SigningResultResponse>(msg.Body) {
+                    let cert = signing_result.SigningResult.Certificate;
+                    let root_cert = signing_result.SigningResult.RootCertificate;
+                    let mut cert_file = std::fs::File::create(cert_name)?;
+                    cert_file.write(cert.as_bytes())?;
+                    let mut ca_cert_file = std::fs::File::create(ca_cert_name)?;
+                    ca_cert_file.write(root_cert.as_bytes())?;
+                }
                 break;
             }
         }

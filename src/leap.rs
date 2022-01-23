@@ -10,6 +10,7 @@ pub struct Message {
 pub struct Header {
     pub ContentType: String,
     pub StatusCode: String,
+    pub ClientTag: Option<String>,
 }
 
 #[derive(Copy, Clone, Deserialize, PartialEq)]

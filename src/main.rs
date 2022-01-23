@@ -1,7 +1,8 @@
-use std::convert::TryInto;
+use openssl::ssl::SslStream;
+use rand::rngs::OsRng;
+use rsa::{pkcs8::{ToPrivateKey, ToPublicKey}, RsaPrivateKey, RsaPublicKey};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use openssl::ssl::SslStream;
 
 pub mod certs;
 pub mod leap;
@@ -10,6 +11,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key_name = "caseta.key";
     let cert_name = "caseta.crt";
     let ca_cert_name = "caseta-bridge.crt";
+
+    let mut rng = OsRng;
+    let public_exponent = 65537u32.into();
+    let private_key = RsaPrivateKey::new_with_exp(&mut rng, 2048, &public_exponent).unwrap();
+    let mut key_file = std::fs::File::create(key_name)?;
+    let private_key_pem = private_key.to_pkcs8_pem().unwrap();
+    let private_key_pem_bytes = private_key_pem.as_bytes();
+    let public_key = RsaPublicKey::from(&private_key);
+    let public_key_pem = public_key.to_public_key_pem().unwrap();
+    let public_key_pem_bytes = public_key_pem.as_bytes();
+    key_file.write(private_key_pem_bytes)?;
 
     let lap_ca = openssl::x509::X509::from_pem(certs::LAP_CA.as_bytes()).unwrap();
     let lap_cert = openssl::x509::X509::from_pem(certs::LAP_CERT.as_bytes()).unwrap();
@@ -30,18 +42,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session_builder.set_connect_state();
     let tls_socket = session_builder.connect().unwrap();
     let mut socket = JsonSocket::new(tls_socket);
-    
-    println!("Connected to bridge. Press and release the small black button on the back of the bridge");
+
+    println!(
+        "Connected to bridge. Press and release the small black button on the back of the bridge"
+    );
 
     'wait: loop {
         if let Ok(msg) = serde_json::from_value::<leap::Message>(socket.read_message()?) {
             if msg.Header.ContentType.starts_with("status;") {
                 if let Ok(body) = serde_json::from_value::<leap::ReportButtonPressBody>(msg.Body) {
-                    if body.Status.Permissions.contains(&leap::Permissions::PhysicalAccess) {
+                    if body
+                        .Status
+                        .Permissions
+                        .contains(&leap::Permissions::PhysicalAccess)
+                    {
                         println!("Demonstrated physical access!");
                         break 'wait;
                     }
                 }
+            }
+        }
+    }
+
+    let mut name_builder = openssl::x509::X509Name::builder().unwrap();
+    name_builder.append_entry_by_nid(openssl::nid::Nid::COMMONNAME, "hacky.rs").unwrap();
+    let name = name_builder.build();
+    let mut csr = openssl::x509::X509ReqBuilder::new().unwrap();
+    csr.set_subject_name(name.as_ref()).unwrap();
+    let rsa = openssl::rsa::Rsa::private_key_from_pem(private_key_pem_bytes).unwrap();
+    let pkey = openssl::pkey::PKey::from_rsa(rsa).unwrap();
+    let rsa_public = openssl::rsa::Rsa::public_key_from_pem(public_key_pem_bytes).unwrap();
+    let pkey_public = openssl::pkey::PKey::from_rsa(rsa_public).unwrap();
+    csr.sign(&pkey, openssl::hash::MessageDigest::sha256())
+        .unwrap();
+    csr.set_pubkey(&pkey_public).unwrap();
+    let csr_text = csr
+        .build()
+        .public_key()
+        .unwrap()
+        .public_key_to_pem()
+        .unwrap();
+    let csr_text: String = std::str::from_utf8(&csr_text).to_owned().unwrap().to_owned();
+    let request = serde_json::json!({
+        "Header": {
+            "RequestType": "Execute",
+            "Url": "/pair",
+            "ClientTag": "get-cert",
+        },
+        "Body": {
+            "CommandType": "CSR",
+            "Parameters": {
+                "CSR": csr_text,
+                "DisplayName": "hack.rs",
+                "DeviceUID": "000000000000",
+                "Role": "Admin",
+            },
+        },
+    });
+    println!("{}", &request);
+    socket.write_message(&request).unwrap();
+    loop {
+        if let Ok(msg) = serde_json::from_value::<leap::Message>(socket.read_message()?) {
+            if msg.Header.ClientTag == Some("get-cert".to_owned()) {
+                println!("{}", msg.Body);
+                break;
             }
         }
     }
@@ -55,9 +119,7 @@ struct JsonSocket {
 
 impl JsonSocket {
     pub fn new(stream: SslStream<TcpStream>) -> Self {
-        Self {
-            stream
-        }
+        Self { stream }
     }
 
     pub fn read_message(&mut self) -> Result<serde_json::Value, std::io::Error> {
@@ -67,7 +129,9 @@ impl JsonSocket {
         while !full_message_read {
             let bytes_read = self.stream.read(&mut intermediate_read_buffer)?;
             final_read_buffer.extend_from_slice(&intermediate_read_buffer[..bytes_read]);
-            if final_read_buffer[final_read_buffer.len()-1] == b'\n' && final_read_buffer[final_read_buffer.len()-2] == b'\r' {
+            if final_read_buffer[final_read_buffer.len() - 1] == b'\n'
+                && final_read_buffer[final_read_buffer.len() - 2] == b'\r'
+            {
                 full_message_read = true;
             }
         }
@@ -76,7 +140,7 @@ impl JsonSocket {
     }
 
     pub fn write_message(&mut self, message: &serde_json::Value) -> Result<(), std::io::Error> {
-        self.stream.write(&message.as_str().unwrap().as_bytes())?;
+        self.stream.write(&message.to_string().as_bytes())?;
         self.stream.write(&[b'\r', b'\n'])?;
         Ok(())
     }

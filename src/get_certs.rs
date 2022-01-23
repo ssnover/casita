@@ -1,6 +1,9 @@
 use openssl::ssl::SslStream;
 use rand::rngs::OsRng;
-use rsa::{pkcs8::{ToPrivateKey, ToPublicKey}, RsaPrivateKey, RsaPublicKey};
+use rsa::{
+    pkcs8::{ToPrivateKey, ToPublicKey},
+    RsaPrivateKey, RsaPublicKey,
+};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
@@ -64,7 +67,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut name_builder = openssl::x509::X509Name::builder().unwrap();
-    name_builder.append_entry_by_nid(openssl::nid::Nid::COMMONNAME, "hacky.rs").unwrap();
+    name_builder
+        .append_entry_by_nid(openssl::nid::Nid::COMMONNAME, "hacky.rs")
+        .unwrap();
     let name = name_builder.build();
     let mut csr = openssl::x509::X509ReqBuilder::new().unwrap();
     csr.set_subject_name(name.as_ref()).unwrap();
@@ -75,12 +80,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     csr.sign(&pkey, openssl::hash::MessageDigest::sha256())
         .unwrap();
     csr.set_pubkey(&pkey_public).unwrap();
-    let csr_text = csr
-        .build()
-        .to_pem()
-        .unwrap();
-    let csr_text: String = std::str::from_utf8(&csr_text).to_owned().unwrap().to_owned();
-    
+    let csr_text = csr.build().to_pem().unwrap();
+    let csr_text: String = std::str::from_utf8(&csr_text)
+        .to_owned()
+        .unwrap()
+        .to_owned();
+
     let request = serde_json::json!({
         "Header": {
             "RequestType": "Execute",
@@ -101,7 +106,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         if let Ok(msg) = serde_json::from_value::<lap::Message>(socket.read_message()?) {
             if msg.Header.ClientTag == Some("get-cert".to_owned()) {
-                if let Ok(signing_result) = serde_json::from_value::<lap::SigningResultResponse>(msg.Body) {
+                if let Ok(signing_result) =
+                    serde_json::from_value::<lap::SigningResultResponse>(msg.Body)
+                {
                     let cert = signing_result.SigningResult.Certificate;
                     let root_cert = signing_result.SigningResult.RootCertificate;
                     let mut cert_file = std::fs::File::create(cert_name)?;

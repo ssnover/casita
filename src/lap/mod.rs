@@ -36,7 +36,7 @@ pub struct ReportButtonPressBody {
 
 #[derive(Deserialize)]
 pub struct SigningResultResponse {
-    pub SigningResult: Certificates
+    pub SigningResult: Certificates,
 }
 
 #[derive(Deserialize)]

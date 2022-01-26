@@ -8,6 +8,10 @@ edition = "2021"
 name = "get_certs"
 path = "src/get_certs.rs"
 
+[[bin]]
+name = "test_certs"
+path = "src/test_certs.rs"
+
 [lib]
 name = "casita"
 path = "src/lib.rs"
@@ -18,3 +22,5 @@ rand = "0.8"
 rsa = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tokio = { version = "1.15", features = ["full"] }
+tokio-openssl = "0.6.3"

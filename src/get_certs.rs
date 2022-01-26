@@ -39,11 +39,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = context.build();
     let ssl = openssl::ssl::Ssl::new(&context).unwrap();
 
-    let mut session_builder =
-        openssl::ssl::SslStreamBuilder::new(ssl, TcpStream::connect("192.168.1.11:8083").unwrap());
-    session_builder.set_connect_state();
-    let tls_socket = session_builder.connect().unwrap();
-    let mut socket = JsonSocket::new(tls_socket);
+    let tcp_stream = TcpStream::connect("192.168.1.11:8083").unwrap();
+    let ssl_stream = ssl.connect(tcp_stream).unwrap();
+    let mut socket = JsonSocket::new(ssl_stream);
 
     println!(
         "Connected to bridge. Press and release the small black button on the back of the bridge"

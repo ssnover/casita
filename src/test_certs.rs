@@ -17,7 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Url": "/server/1/status/ping",
         }
     });
-    client.send_message(&ping_msg).await.unwrap();
+    client.connect().await;
+    client.send(ping_msg).await.unwrap();
 
     let pong = client.read_message().await.unwrap();
     println!("Response from Caseta Hub!");

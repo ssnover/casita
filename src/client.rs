@@ -4,12 +4,13 @@ use openssl::{
     ssl::{Ssl, SslContext, SslContextBuilder, SslMethod},
     x509::X509,
 };
+use serde_json::json;
 use std::{fs::File, io::Read};
 use std::{
     net::{SocketAddr},
     path::PathBuf,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
 
@@ -51,7 +52,8 @@ impl Certs {
 pub struct Client {
     socket_addr: SocketAddr,
     ssl_context: SslContext,
-    stream: Option<SslStream<TcpStream>>,
+    read_stream: Option<ReadHalf<SslStream<TcpStream>>>,
+    write_channel: Option<async_channel::Sender<serde_json::Value>>,
 }
 
 impl Client {
@@ -68,7 +70,8 @@ impl Client {
         Self {
             socket_addr: addr.parse().unwrap(),
             ssl_context: context,
-            stream: None,
+            read_stream: None,
+            write_channel: None,
         }
     }
 
@@ -77,21 +80,24 @@ impl Client {
         let stream = TcpStream::connect(self.socket_addr).await.unwrap();
         let mut stream = SslStream::new(ssl, stream).unwrap();
         std::pin::Pin::new(&mut stream).connect().await.unwrap();
-        self.stream = Some(stream);
+        let (read, write) = tokio::io::split(stream);
+        let (tx, rx) = async_channel::bounded(10);
+        self.read_stream = Some(read);
+        self.write_channel = Some(tx);
+        tokio::spawn(Client::write_context(write, rx));
     }
 
-    pub async fn send_message(&mut self, msg: &serde_json::Value) -> std::io::Result<()> {
-        if let Some(stream) = self.stream.as_mut() {
-            stream.write(&msg.to_string().as_bytes()).await?;
-            stream.write(&[b'\r', b'\n']).await?;
+    pub async fn send(&mut self, msg: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(tx) = self.write_channel.as_mut() {
+            tx.send(msg).await?;
             Ok(())
         } else {
-            Err(std::io::ErrorKind::NotConnected.into())
+            Err(Box::<std::io::Error>::new(std::io::ErrorKind::NotConnected.into()))
         }
     }
 
     pub async fn read_message(&mut self) -> std::io::Result<serde_json::Value> {
-        if let Some(stream) = self.stream.as_mut() {
+        if let Some(stream) = self.read_stream.as_mut() {
             let mut intermediate_read_buffer = [0u8; 1024];
             let mut final_read_buffer = vec![];
             let mut full_message_read = false;
@@ -108,6 +114,30 @@ impl Client {
             Ok(serde_json::from_slice(&final_read_buffer[..]).unwrap())
         } else {
             Err(std::io::ErrorKind::NotConnected.into())
+        }
+    }
+
+    async fn write_context(mut stream: WriteHalf<SslStream<TcpStream>>, rx: async_channel::Receiver<serde_json::Value>) {
+        let ping_msg: serde_json::Value = json!({
+            "CommuniqueType": "ReadRequest",
+            "Header": {
+                "Url": "/server/1/status/ping",
+            }
+        });
+
+        loop {
+            let next_msg = tokio::select! {
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => { ping_msg.clone() },
+                msg = rx.recv() => {
+                    if let Ok(msg) = msg {
+                        msg
+                    } else {
+                        break;
+                    }
+                }
+            };
+            stream.write(&next_msg.to_string().as_bytes()).await.unwrap();
+            stream.write(&[b'\r', b'\n']).await.unwrap();
         }
     }
 }

@@ -18,6 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 async-channel = "1.6.1"
+log = "0.4.14"
 openssl = "0.10"
 rand = "0.8"
 rsa = "0.5"

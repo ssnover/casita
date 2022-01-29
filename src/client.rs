@@ -1,18 +1,20 @@
+use async_channel::{Receiver, Sender};
 use openssl::{
     pkey::{PKey, Private},
     rsa::Rsa,
     ssl::{Ssl, SslContext, SslContextBuilder, SslMethod},
     x509::X509,
 };
-use serde_json::json;
+use serde_json::{json, Value};
+use std::io;
 use std::{fs::File, io::Read};
-use std::{
-    net::{SocketAddr},
-    path::PathBuf,
-};
+use std::{net::SocketAddr, path::PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
+
+type WriteStream = WriteHalf<SslStream<TcpStream>>;
+type ReadStream = ReadHalf<SslStream<TcpStream>>;
 
 pub struct Certs {
     leap_ca_cert: X509,
@@ -52,8 +54,8 @@ impl Certs {
 pub struct Client {
     socket_addr: SocketAddr,
     ssl_context: SslContext,
-    read_stream: Option<ReadHalf<SslStream<TcpStream>>>,
-    write_channel: Option<async_channel::Sender<serde_json::Value>>,
+    write_channel: Option<Sender<Value>>,
+    read_channel: Option<Receiver<Value>>,
 }
 
 impl Client {
@@ -70,8 +72,8 @@ impl Client {
         Self {
             socket_addr: addr.parse().unwrap(),
             ssl_context: context,
-            read_stream: None,
             write_channel: None,
+            read_channel: None,
         }
     }
 
@@ -81,63 +83,127 @@ impl Client {
         let mut stream = SslStream::new(ssl, stream).unwrap();
         std::pin::Pin::new(&mut stream).connect().await.unwrap();
         let (read, write) = tokio::io::split(stream);
-        let (tx, rx) = async_channel::bounded(10);
-        self.read_stream = Some(read);
-        self.write_channel = Some(tx);
-        tokio::spawn(Client::write_context(write, rx));
+        let (write_tx, write_rx) = async_channel::bounded(10);
+        let (read_tx, read_rx) = async_channel::bounded(10);
+        let (timeout_tx, timeout_rx) = async_channel::bounded(10);
+
+        tokio::spawn(Client::write_context(write, write_rx, timeout_rx.clone()));
+        tokio::spawn(Client::keep_alive_context(write_tx.clone(), timeout_rx));
+        tokio::spawn(Client::read_context(read, read_tx, timeout_tx));
+
+        self.write_channel = Some(write_tx);
+        self.read_channel = Some(read_rx);
     }
 
-    pub async fn send(&mut self, msg: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn disconnect(&mut self) {
+        self.write_channel = None;
+        self.read_channel = None;
+    }
+
+    pub fn is_connected(&self) -> bool {
+        match (&self.write_channel, &self.read_channel) {
+            (Some(w), Some(r)) => !w.is_closed() || !r.is_closed(),
+            _ => false,
+        }
+    }
+
+    pub async fn send(&mut self, msg: Value) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(tx) = self.write_channel.as_mut() {
             tx.send(msg).await?;
             Ok(())
         } else {
-            Err(Box::<std::io::Error>::new(std::io::ErrorKind::NotConnected.into()))
+            Err(Box::<io::Error>::new(io::ErrorKind::NotConnected.into()))
         }
     }
 
-    pub async fn read_message(&mut self) -> std::io::Result<serde_json::Value> {
-        if let Some(stream) = self.read_stream.as_mut() {
-            let mut intermediate_read_buffer = [0u8; 1024];
-            let mut final_read_buffer = vec![];
-            let mut full_message_read = false;
-            while !full_message_read {
-                let bytes_read = stream.read(&mut intermediate_read_buffer).await?;
-                final_read_buffer.extend_from_slice(&intermediate_read_buffer[..bytes_read]);
-                if final_read_buffer[final_read_buffer.len() - 1] == b'\n'
-                    && final_read_buffer[final_read_buffer.len() - 2] == b'\r'
-                {
-                    full_message_read = true;
+    pub async fn read_message(&mut self) -> io::Result<Value> {
+        if let Some(rx) = self.read_channel.as_mut() {
+            if let Ok(msg) = rx.recv().await {
+                Ok(msg)
+            } else {
+                Err(io::ErrorKind::NotConnected.into())
+            }
+        } else {
+            Err(io::ErrorKind::NotConnected.into())
+        }
+    }
+
+    async fn read_context(mut stream: ReadStream, tx: Sender<Value>, timeout_tx: Sender<()>) {
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {
+                    log::error!("Connection to Lutron Caseta timed out");
+                    let _ = timeout_tx.send(()).await;
+                    break;
+                },
+                msg = Client::read_from_stream(&mut stream) => {
+                    let msg = msg.unwrap();
+                    tx.send(msg).await.unwrap();
                 }
             }
-
-            Ok(serde_json::from_slice(&final_read_buffer[..]).unwrap())
-        } else {
-            Err(std::io::ErrorKind::NotConnected.into())
         }
     }
 
-    async fn write_context(mut stream: WriteHalf<SslStream<TcpStream>>, rx: async_channel::Receiver<serde_json::Value>) {
-        let ping_msg: serde_json::Value = json!({
-            "CommuniqueType": "ReadRequest",
-            "Header": {
-                "Url": "/server/1/status/ping",
-            }
-        });
-
+    async fn read_from_stream(stream: &mut ReadStream) -> io::Result<Value> {
+        let mut intermediate_read_buffer = [0u8; 1024];
+        let mut final_read_buffer = vec![];
         loop {
-            let next_msg = tokio::select! {
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => { ping_msg.clone() },
+            let bytes_read = stream.read(&mut intermediate_read_buffer).await?;
+            final_read_buffer.extend_from_slice(&intermediate_read_buffer[..bytes_read]);
+            if let Some(newline_idx) = find_newline_in_bytes(&final_read_buffer) {
+                return Ok(serde_json::from_slice(&final_read_buffer[..newline_idx]).unwrap());
+            }
+        }
+    }
+
+    async fn write_context(mut stream: WriteStream, rx: Receiver<Value>, timeout_rx: Receiver<()>) {
+        loop {
+            tokio::select! {
+                _ = timeout_rx.recv() => {
+                    break;
+                },
                 msg = rx.recv() => {
                     if let Ok(msg) = msg {
-                        msg
-                    } else {
-                        break;
+                        Client::write_to_stream(&mut stream, msg).await.unwrap();
                     }
                 }
-            };
-            stream.write(&next_msg.to_string().as_bytes()).await.unwrap();
-            stream.write(&[b'\r', b'\n']).await.unwrap();
+            }
         }
     }
+
+    async fn write_to_stream(stream: &mut WriteStream, msg: Value) -> io::Result<()> {
+        let _bytes_written = stream
+            .write(&[msg.to_string().as_bytes(), &[b'\r', b'\n']].concat())
+            .await?;
+        Ok(())
+    }
+
+    async fn keep_alive_context(tx: Sender<Value>, timeout_rx: Receiver<()>) {
+        loop {
+            tokio::select! {
+                _ = timeout_rx.recv() => {
+                    break;
+                },
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                    let msg = json!({
+                        "CommuniqueType": "ReadRequest",
+                        "Header": {
+                            "Url": "/server/1/status/ping",
+                        }
+                    });
+                    let _ = tx.send(msg).await;
+                }
+            }
+        }
+    }
+}
+
+fn find_newline_in_bytes(bytes: &[u8]) -> Option<usize> {
+    for (idx, &byte) in bytes.iter().enumerate() {
+        if byte == b'\r' && bytes.len() != idx + 1 && bytes[idx + 1] == b'\n' {
+            return Some(idx);
+        }
+    }
+
+    None
 }

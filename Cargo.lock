@@ -60,6 +60,7 @@ name = "casita"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "log",
  "openssl",
  "rand",
  "rsa",

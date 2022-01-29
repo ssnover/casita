@@ -77,11 +77,11 @@ impl Client {
         }
     }
 
-    pub async fn connect(&mut self) {
-        let ssl = Ssl::new(&self.ssl_context).unwrap();
-        let stream = TcpStream::connect(self.socket_addr).await.unwrap();
-        let mut stream = SslStream::new(ssl, stream).unwrap();
-        std::pin::Pin::new(&mut stream).connect().await.unwrap();
+    pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let ssl = Ssl::new(&self.ssl_context)?;
+        let stream = TcpStream::connect(self.socket_addr).await?;
+        let mut stream = SslStream::new(ssl, stream)?;
+        std::pin::Pin::new(&mut stream).connect().await?;
         let (read, write) = tokio::io::split(stream);
         let (write_tx, write_rx) = async_channel::bounded(10);
         let (read_tx, read_rx) = async_channel::bounded(10);
@@ -93,6 +93,8 @@ impl Client {
 
         self.write_channel = Some(write_tx);
         self.read_channel = Some(read_rx);
+
+        Ok(())
     }
 
     pub fn disconnect(&mut self) {

@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Url": "/server/1/status/ping",
         }
     });
-    client.connect().await;
+    client.connect().await.unwrap();
     client.send(ping_msg).await.unwrap();
 
     let pong = client.read_message().await.unwrap();

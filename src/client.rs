@@ -161,8 +161,9 @@ impl Client {
             let bytes_read = stream.read(&mut intermediate_read_buffer).await?;
             final_read_buffer.extend_from_slice(&intermediate_read_buffer[..bytes_read]);
             if let Some(newline_idx) = find_newline_in_bytes(&final_read_buffer) {
-                let received_msg: Value = serde_json::from_slice(&final_read_buffer[..newline_idx]).unwrap();
-                log::debug!("RX: {}", received_msg.to_string()); 
+                let received_msg: Value =
+                    serde_json::from_slice(&final_read_buffer[..newline_idx]).unwrap();
+                log::debug!("RX: {}", received_msg.to_string());
                 return Ok(received_msg);
             }
         }

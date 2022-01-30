@@ -1,4 +1,7 @@
-use casita::{Certs, leap::{self, CommuniqueType}};
+use casita::{
+    leap::{self, CommuniqueType},
+    Certs,
+};
 use std::path::PathBuf;
 
 #[tokio::main]
@@ -7,7 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("USAGE: get_certs IP_ADDR");
         std::process::exit(1);
     });
-    
+
     let certs = Certs::new(
         PathBuf::from("./caseta-bridge.crt"),
         PathBuf::from("./caseta.crt"),
@@ -15,7 +18,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut client = casita::Client::new(certs, format!("{}:8081", ip_addr)).await;
 
-    let ping_msg = leap::Message::new(CommuniqueType::ReadRequest, "/server/1/status/ping".to_owned());
+    let ping_msg = leap::Message::new(
+        CommuniqueType::ReadRequest,
+        "/server/1/status/ping".to_owned(),
+    );
     client.connect().await.unwrap();
     client.send(ping_msg).await.unwrap();
 

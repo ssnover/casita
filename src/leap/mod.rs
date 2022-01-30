@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "PascalCase")]
@@ -50,5 +50,5 @@ impl Header {
     pub fn with_client_tag(mut self, tag: String) -> Self {
         self.client_tag = Some(tag);
         self
-    } 
+    }
 }

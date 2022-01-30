@@ -1,5 +1,4 @@
-use casita::Certs;
-use serde_json::json;
+use casita::{Certs, leap::{self, CommuniqueType}};
 use std::path::PathBuf;
 
 #[tokio::main]
@@ -16,18 +15,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut client = casita::Client::new(certs, format!("{}:8081", ip_addr)).await;
 
-    let ping_msg = json!({
-        "CommuniqueType": "ReadRequest",
-        "Header": {
-            "Url": "/server/1/status/ping",
-        }
-    });
+    let ping_msg = leap::Message::new(CommuniqueType::ReadRequest, "/server/1/status/ping".to_owned());
     client.connect().await.unwrap();
     client.send(ping_msg).await.unwrap();
 
     let pong = client.read_message().await.unwrap();
+    let pong = serde_json::from_value::<leap::Message>(pong).unwrap();
     println!("Response from Caseta Hub!");
-    println!("{}", pong.to_string());
+    println!("{:?}", pong);
 
     Ok(())
 }

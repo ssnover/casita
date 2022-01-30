@@ -13,6 +13,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
 
+use crate::leap;
+
 type WriteStream = WriteHalf<SslStream<TcpStream>>;
 type ReadStream = ReadHalf<SslStream<TcpStream>>;
 
@@ -111,13 +113,17 @@ impl Client {
         }
     }
 
-    pub async fn send(&mut self, msg: Value) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn send_raw(&mut self, msg: Value) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(tx) = self.write_channel.as_mut() {
             tx.send(msg).await?;
             Ok(())
         } else {
             Err(Box::<io::Error>::new(io::ErrorKind::NotConnected.into()))
         }
+    }
+
+    pub async fn send(&mut self, msg: leap::Message) -> Result<(), Box<dyn std::error::Error>> {
+        self.send_raw(serde_json::to_value(msg)?).await
     }
 
     pub async fn read_message(&mut self) -> io::Result<Value> {

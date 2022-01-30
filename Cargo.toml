@@ -6,11 +6,11 @@ edition = "2021"
 
 [[bin]]
 name = "get_certs"
-path = "src/get_certs.rs"
+path = "src/bin/get_certs.rs"
 
 [[bin]]
 name = "test_certs"
-path = "src/test_certs.rs"
+path = "src/bin/test_certs.rs"
 
 [lib]
 name = "casita"

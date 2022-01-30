@@ -7,7 +7,7 @@ use rsa::{
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-mod lap;
+use casita::lap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ip_addr = std::env::args().nth(1).unwrap_or_else(|| {

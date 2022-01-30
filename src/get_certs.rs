@@ -10,6 +10,11 @@ use std::net::TcpStream;
 mod lap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let ip_addr = std::env::args().nth(1).unwrap_or_else(|| {
+        eprintln!("USAGE: get_certs IP_ADDR");
+        std::process::exit(1);
+    });
+
     let key_name = "caseta.key";
     let cert_name = "caseta.crt";
     let ca_cert_name = "caseta-bridge.crt";
@@ -39,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = context.build();
     let ssl = openssl::ssl::Ssl::new(&context).unwrap();
 
-    let tcp_stream = TcpStream::connect("192.168.1.11:8083").unwrap();
+    let tcp_stream = TcpStream::connect(format!("{}:8083", &ip_addr)).unwrap();
     let ssl_stream = ssl.connect(tcp_stream).unwrap();
     let mut socket = JsonSocket::new(ssl_stream);
 

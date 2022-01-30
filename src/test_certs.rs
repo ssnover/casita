@@ -4,12 +4,17 @@ use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let ip_addr = std::env::args().nth(1).unwrap_or_else(|| {
+        eprintln!("USAGE: get_certs IP_ADDR");
+        std::process::exit(1);
+    });
+    
     let certs = Certs::new(
         PathBuf::from("./caseta-bridge.crt"),
         PathBuf::from("./caseta.crt"),
         PathBuf::from("./caseta.key"),
     )?;
-    let mut client = casita::Client::new(certs, "192.168.1.11:8081".to_owned()).await;
+    let mut client = casita::Client::new(certs, format!("{}:8081", ip_addr)).await;
 
     let ping_msg = json!({
         "CommuniqueType": "ReadRequest",
